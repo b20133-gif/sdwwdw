@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>소멸의 여정 : 핏빛 추격자</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            box-shadow: 0 0 50px rgba(150, 0, 0, 0.4);
+            border: 2px solid #330000;
+        }
+
+        #main-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background-color: #020202;
+        }
+
+        #minimap-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            border: 2px solid #ff3333;
+            background: rgba(0, 0, 0, 0.8);
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
+            z-index: 10;
+        }
+        
+        #minimap-canvas { width: 100%; height: 100%; }
+        
+        .minimap-label {
+            position: absolute;
+            top: -22px;
+            right: 0;
+            color: #ff3333;
+            font-size: 14px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(5, 0, 0, 0.95);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            text-align: center;
+        }
+        h2 { color: #ff3333; font-size: 36px; text-shadow: 3px 3px #550000; margin-bottom: 10px; }
+        p.desc { color: #ccc; margin-bottom: 40px; font-size: 18px; }
+        
+        .btn-group { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; max-width: 600px; }
+        button {
+            background: #111; color: #fff; border: 1px solid #ff3333;
+            padding: 15px 30px; font-size: 18px; font-family: inherit;
+            cursor: pointer; transition: 0.2s; text-transform: uppercase;
+        }
+        button:hover { background: #ff3333; color: #000; box-shadow: 0 0 20px #ff3333; }
+
+        #damage-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 0, 0, 0.7);
+            mix-blend-mode: overlay;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 15;
+            transition: opacity 0.1s;
+        }
+
+        .controls-info {
+            position: absolute;
+            bottom: -35px;
+            color: #555;
+            font-size: 16px;
+            width: 100%;
+            text-align: center;
+        }
+
+        #message {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ff3333;
+            font-size: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 20px;
+            border: 1px solid #550000;
+            display: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="main-canvas" width="800" height="600"></canvas>
+        <div id="damage-overlay"></div>
+
+        <div id="minimap-container">
+            <div class="minimap-label">OBSERVER VIEW</div>
+            <canvas id="minimap-canvas" width="150" height="150"></canvas>
+        </div>
+
+        <div id="message"></div>
+
+        <div id="ui-layer">
+            <h2 id="stage-title">스테이지</h2>
+            <p class="desc" id="stage-desc">설명</p>
+            <div class="btn-group" id="btn-container"></div>
+        </div>
+
+        <div class="controls-info">[W, S] 전진/후진 &nbsp;&nbsp; [A, D] 시야 회전 (이어폰 착용 권장)</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('main-canvas');
+        const ctx = canvas.getContext('2d');
+        const mCanvas = document.getElementById('minimap-canvas');
+        const mCtx = mCanvas.getContext('2d');
+        const uiLayer = document.getElementById('ui-layer');
+
+        const SCREEN_W = canvas.width;
+        const SCREEN_H = canvas.height;
+
+        let audioCtx;
+        function initAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playHorrorSound() {
+            if (!audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.2);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 1.5);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 1.5);
+
+            for(let i=0; i<5; i++) {
+                const stepOsc = audioCtx.createOscillator();
+                const stepGain = audioCtx.createGain();
+                stepOsc.type = 'sine';
+                stepOsc.frequency.setValueAtTime(150, audioCtx.currentTime + i*0.4);
+                stepOsc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i*0.4 + 0.1);
+                stepGain.gain.setValueAtTime(1, audioCtx.currentTime + i*0.4);
+                stepGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i*0.4 + 0.1);
+                stepOsc.connect(stepGain); stepGain.connect(audioCtx.destination);
+                stepOsc.start(audioCtx.currentTime + i*0.4);
+                stepOsc.stop(audioCtx.currentTime + i*0.4 + 0.1);
+            }
+        }
+
+        const MAP_SIZE = 15;
+        let worldMap = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,2,0,1,0,0,0,0,7,0,1],
+            [1,0,1,1,0,1,0,1,0,1,1,0,1,0,1],
+            [1,0,1,1,0,1,0,0,0,0,1,0,1,0,1],
+            [1,0,0,0,0,1,1,1,1,0,0,0,0,0,1],
+            [1,1,1,1,0,0,0,0,1,1,1,0,1,1,1],
+            [1,0,0,0,0,1,1,0,0,0,1,0,0,0,1],
+            [1,3,1,1,0,1,1,1,1,0,6,0,0,0,1], 
+            [1,0,0,1,0,0,0,0,1,0,1,0,0,0,1],
+            [1,1,0,1,1,1,1,0,1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,1,4,1,0,0,0,1,0,1],
+            [1,0,1,1,1,0,0,0,0,0,1,1,1,0,1],
+            [1,0,0,0,1,1,1,1,1,0,5,0,0,0,1],
+            [1,1,1,0,0,0,0,0,0,0,1,1,1,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        let player = {
+            x: 1.5, y: 1.5, 
+            dirX: 1, dirY: 0, 
+            planeX: 0, planeY: 0.66,
+            hp: 5, maxHp: 5,
+            hitCooldown: 0 
+        };
+
+        let stageCooldown = 0; 
+
+        // 추격자 초기 상태: 비활성화 (active: false)
+        let enemy = {
+            active: false, 
+            x: 13.5, y: 13.5, 
+            stunTimer: 0,
+            path: [],
+            pathTimer: 0
+        };
+
+        let keys = { w: false, s: false, a: false, d: false };
+        let isGamePaused = false;
+        let clearedStages = 0;
+        let activeStageNode = null;
+        let zBuffer = new Float32Array(SCREEN_W);
+
+        const stagesData = {
+            2: { id: 1, title: "운명의 홀짝", desc: "주사위의 결과는 홀일까, 짝일까?" },
+            3: { id: 2, title: "심연의 색상", desc: "붉은 문과 검은 문, 선택하라." },
+            4: { id: 3, title: "러시안 룰렛", desc: "6개의 약실 중 1곳만 안전하다." },
+            5: { id: 4, title: "세 개의 상자", desc: "하나의 상자에만 통과 열쇠가 있다." },
+            6: { id: 5, title: "동전 앞뒤", desc: "떨어지는 동전의 면을 맞혀라." },
+            7: { id: 6, title: "마지막 인도자", desc: "1~5 중 진짜 탈출구를 찾아라." }
+        };
+
+        window.addEventListener('keydown', (e) => {
+            const k = e.key.toLowerCase();
+            if(keys.hasOwnProperty(k)) keys[k] = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            const k = e.key.toLowerCase();
+            if(keys.hasOwnProperty(k)) keys[k] = false;
+        });
+
+        function getPath(sx, sy, gx, gy) {
+            let q = [{x: sx, y: sy, path: []}];
+            let vis = Array.from({length: MAP_SIZE}, () => Array(MAP_SIZE).fill(false));
+            vis[sy][sx] = true;
+            
+            let dirs = [[0,-1], [0,1], [-1,0], [1,0]];
+            while (q.length > 0) {
+                let cur = q.shift();
+                if (cur.x === gx && cur.y === gy) return cur.path;
+                
+                for (let d of dirs) {
+                    let nx = cur.x + d[0], ny = cur.y + d[1];
+                    if (nx >= 0 && nx < MAP_SIZE && ny >= 0 && ny < MAP_SIZE && worldMap[ny][nx] !== 1 && !vis[ny][nx]) {
+                        vis[ny][nx] = true;
+                        q.push({x: nx, y: ny, path: [...cur.path, {x: nx + 0.5, y: ny + 0.5}]});
+                    }
+                }
+            }
+            return [];
+        }
+
+        function render3D() {
+            let grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+            grad.addColorStop(0, '#010101'); 
+            grad.addColorStop(0.5, '#000'); 
+            grad.addColorStop(1, '#080000'); 
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+
+            let camZ = 0.5 - ((player.maxHp - player.hp) * 0.1); 
+
+            for (let x = 0; x < SCREEN_W; x++) {
+                let cameraX = 2 * x / SCREEN_W - 1;
+                let rayDirX = player.dirX + player.planeX * cameraX;
+                let rayDirY = player.dirY + player.planeY * cameraX;
+
+                let mapX = Math.floor(player.x);
+                let mapY = Math.floor(player.y);
+
+                let sideDistX, sideDistY;
+                let deltaDistX = Math.abs(1 / rayDirX);
+                let deltaDistY = Math.abs(1 / rayDirY);
+                let perpWallDist, stepX, stepY, hit = 0, side;
+
+                if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; } 
+                else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
+                
+                if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; } 
+                else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
+
+                while (hit === 0) {
+                    if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; } 
+                    else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+                    if (worldMap[mapY][mapX] > 0) hit = 1;
+                }
+
+                if (side === 0) perpWallDist = (mapX - player.x + (1 - stepX) / 2) / rayDirX;
+                else perpWallDist = (mapY - player.y + (1 - stepY) / 2) / rayDirY;
+
+                zBuffer[x] = perpWallDist; 
+
+                let lineHeight = Math.floor(SCREEN_H / perpWallDist);
+                let drawStart = Math.floor(-lineHeight * (1 - camZ) + SCREEN_H / 2);
+                let drawEnd = Math.floor(lineHeight * camZ + SCREEN_H / 2);
+
+                let color = (worldMap[mapY][mapX] === 1) ? 
+                            (side === 1 ? [20, 20, 20] : [10, 10, 10]) : 
+                            (side === 1 ? [150, 0, 0] : [100, 0, 0]);
+
+                let fog = Math.max(0, 1 - (perpWallDist / 6)); 
+                if (worldMap[mapY][mapX] >= 2) fog = Math.max(0.1, 1 - (perpWallDist / 10));
+
+                ctx.fillStyle = `rgb(${color[0]*fog}, ${color[1]*fog}, ${color[2]*fog})`;
+                ctx.fillRect(x, drawStart, 1, drawEnd - drawStart);
+            }
+
+            if (enemy.active) {
+                let spriteX = enemy.x - player.x;
+                let spriteY = enemy.y - player.y;
+
+                let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+                let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+                let transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+                if (transformY > 0.1) {
+                    let spriteScreenX = Math.floor((SCREEN_W / 2) * (1 + transformX / transformY));
+                    let spriteBottom = Math.floor((SCREEN_H / transformY) * camZ + SCREEN_H / 2);
+                    
+                    let enemyScale = 0.85; 
+                    let spriteHeight = Math.abs(SCREEN_H / transformY) * enemyScale;
+                    let spriteWidth = spriteHeight / 2;
+
+                    if (spriteScreenX > -spriteWidth && spriteScreenX < SCREEN_W + spriteWidth && transformY < zBuffer[spriteScreenX]) {
+                        drawEnemySprite(spriteScreenX, spriteBottom, spriteHeight, enemy.stunTimer > 0);
+                    }
+                }
+            }
+        }
+
+        function drawEnemySprite(cx, bottomY, h, isStunned) {
+            let jx = isStunned ? 0 : (Math.random() - 0.5) * h * 0.04;
+            let jy = isStunned ? 0 : (Math.random() - 0.5) * h * 0.04;
+            cx += jx;
+            bottomY += jy;
+
+            let lw = Math.max(2, h * 0.03);
+            ctx.lineWidth = lw;
+            
+            let topY = bottomY - h;
+            let headR = h * 0.18; 
+            let neckY = topY + headR * 2.2; 
+            let pelvisY = bottomY - h * 0.45; 
+            
+            ctx.shadowColor = isStunned ? 'transparent' : 'rgba(255, 0, 0, 0.9)';
+            ctx.shadowBlur = isStunned ? 0 : h * 0.3;
+            
+            ctx.strokeStyle = isStunned ? '#333' : '#6b0000'; 
+            ctx.beginPath(); 
+            
+            ctx.moveTo(cx, neckY); 
+            ctx.quadraticCurveTo(cx + h*0.1, (neckY+pelvisY)/2, cx, pelvisY);
+            
+            ctx.moveTo(cx, pelvisY); 
+            ctx.lineTo(cx - h*0.15, bottomY - h*0.2);
+            ctx.lineTo(cx - h*0.3, bottomY); 
+            
+            ctx.moveTo(cx, pelvisY); 
+            ctx.lineTo(cx + h*0.2, bottomY - h*0.15);
+            ctx.lineTo(cx + h*0.35, bottomY); 
+            
+            ctx.moveTo(cx, neckY + h*0.05); 
+            ctx.lineTo(cx - h*0.3, isStunned ? pelvisY : neckY + h*0.4); 
+            ctx.lineTo(cx - h*0.15, isStunned ? bottomY : neckY + h*0.7); 
+
+            ctx.moveTo(cx, neckY + h*0.05); 
+            ctx.lineTo(cx + h*0.35, isStunned ? pelvisY : neckY + h*0.2); 
+            ctx.lineTo(cx + h*0.45, isStunned ? bottomY : neckY - h*0.2); 
+            ctx.stroke();
+
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); 
+            ctx.ellipse(cx, topY + headR, headR, headR * 1.3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.shadowBlur = 0; 
+
+            if (!isStunned) {
+                ctx.fillStyle = '#050505'; 
+                ctx.beginPath();
+                ctx.ellipse(cx - headR*0.4, topY + headR*0.7, headR*0.25, headR*0.35, 0.2, 0, Math.PI*2);
+                ctx.ellipse(cx + headR*0.4, topY + headR*0.7, headR*0.25, headR*0.35, -0.2, 0, Math.PI*2);
+                ctx.fill();
+
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(cx - headR*0.4, topY + headR*0.7, headR*0.08, 0, Math.PI*2); 
+                ctx.arc(cx + headR*0.3, topY + headR*0.8, headR*0.05, 0, Math.PI*2); 
+                ctx.fill();
+
+                ctx.strokeStyle = '#aa0000';
+                ctx.lineWidth = Math.max(1, lw * 0.4);
+                ctx.beginPath();
+                ctx.moveTo(cx - headR*0.4, topY + headR*1.05); ctx.lineTo(cx - headR*0.4, topY + headR*2.0);
+                ctx.moveTo(cx + headR*0.4, topY + headR*1.05); ctx.lineTo(cx + headR*0.35, topY + headR*1.8);
+                ctx.stroke();
+
+                ctx.fillStyle = '#050505';
+                ctx.beginPath();
+                ctx.ellipse(cx, topY + headR*1.4, headR*0.4, headR*0.7, 0, 0, Math.PI*2);
+                ctx.fill();
+                
+                ctx.strokeStyle = '#ff8888';
+                ctx.lineWidth = Math.max(1, lw * 0.2);
+                ctx.beginPath();
+                for(let i=0; i<5; i++) {
+                    ctx.moveTo(cx - headR*0.3 + i*(headR*0.15), topY + headR*1.0);
+                    ctx.lineTo(cx - headR*0.25 + i*(headR*0.15), topY + headR*1.2);
+                }
+                for(let i=0; i<4; i++) {
+                    ctx.moveTo(cx - headR*0.25 + i*(headR*0.15), topY + headR*2.0);
+                    ctx.lineTo(cx - headR*0.2 + i*(headR*0.15), topY + headR*1.7);
+                }
+                ctx.stroke();
+
+            } else {
+                ctx.strokeStyle = '#333';
+                ctx.beginPath();
+                ctx.moveTo(cx - headR*0.5, topY + headR*0.9); ctx.lineTo(cx + headR*0.5, topY + headR*1.1);
+                ctx.moveTo(cx - headR*0.5, topY + headR*1.5); ctx.lineTo(cx + headR*0.5, topY + headR*1.6);
+                ctx.stroke();
+            }
+        }
+
+        function renderMinimap() {
+            mCtx.fillStyle = '#050505';
+            mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
+            
+            let tw = mCanvas.width / MAP_SIZE;
+            let th = mCanvas.height / MAP_SIZE;
+
+            for (let y = 0; y < MAP_SIZE; y++) {
+                for (let x = 0; x < MAP_SIZE; x++) {
+                    if (worldMap[y][x] === 1) mCtx.fillStyle = '#222';
+                    else if (worldMap[y][x] >= 2) mCtx.fillStyle = '#aa0000'; 
+                    else mCtx.fillStyle = '#000';
+                    if (worldMap[y][x] !== 0) mCtx.fillRect(x * tw, y * th, tw, th);
+                }
+            }
+
+            mCtx.fillStyle = '#fff';
+            mCtx.beginPath(); mCtx.arc(player.x * tw, player.y * th, tw/3, 0, Math.PI * 2); mCtx.fill();
+
+            if (enemy.active) {
+                mCtx.fillStyle = enemy.stunTimer > 0 ? '#550000' : '#ff0000';
+                mCtx.beginPath(); mCtx.arc(enemy.x * tw, enemy.y * th, (tw/2) * (1 + Math.sin(Date.now()/100)*0.3), 0, Math.PI * 2); mCtx.fill();
+            }
+        }
+
+        function updateGame() {
+            if (isGamePaused) return;
+
+            if (player.hitCooldown > 0) player.hitCooldown--;
+            if (stageCooldown > 0) stageCooldown--;
+
+            const moveSpeed = 0.05;
+            const rotSpeed = 0.04;
+            const collisionBuffer = 1.2; 
+
+            if (keys.w) {
+                if (worldMap[Math.floor(player.y)][Math.floor(player.x + player.dirX * moveSpeed * collisionBuffer)] === 0) player.x += player.dirX * moveSpeed;
+                if (worldMap[Math.floor(player.y + player.dirY * moveSpeed * collisionBuffer)][Math.floor(player.x)] === 0) player.y += player.dirY * moveSpeed;
+            }
+            if (keys.s) {
+                if (worldMap[Math.floor(player.y)][Math.floor(player.x - player.dirX * moveSpeed * collisionBuffer)] === 0) player.x -= player.dirX * moveSpeed;
+                if (worldMap[Math.floor(player.y - player.dirY * moveSpeed * collisionBuffer)][Math.floor(player.x)] === 0) player.y -= player.dirY * moveSpeed;
+            }
+            if (keys.d) {
+                let oldDirX = player.dirX;
+                player.dirX = player.dirX * Math.cos(rotSpeed) - player.dirY * Math.sin(rotSpeed);
+                player.dirY = oldDirX * Math.sin(rotSpeed) + player.dirY * Math.cos(rotSpeed);
+                let oldPlaneX = player.planeX;
+                player.planeX = player.planeX * Math.cos(rotSpeed) - player.planeY * Math.sin(rotSpeed);
+                player.planeY = oldPlaneX * Math.sin(rotSpeed) + player.planeY * Math.cos(rotSpeed);
+            }
+            if (keys.a) {
+                let oldDirX = player.dirX;
+                player.dirX = player.dirX * Math.cos(-rotSpeed) - player.dirY * Math.sin(-rotSpeed);
+                player.dirY = oldDirX * Math.sin(-rotSpeed) + player.dirY * Math.cos(-rotSpeed);
+                let oldPlaneX = player.planeX;
+                player.planeX = player.planeX * Math.cos(-rotSpeed) - player.planeY * Math.sin(-rotSpeed);
+                player.planeY = oldPlaneX * Math.sin(-rotSpeed) + player.planeY * Math.cos(-rotSpeed);
+            }
+
+            if (stageCooldown === 0) {
+                checkStageCollision();
+            }
+
+            if (enemy.active) {
+                if (enemy.stunTimer > 0) {
+                    enemy.stunTimer--;
+                } else {
+                    let dx = player.x - enemy.x;
+                    let dy = player.y - enemy.y;
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    let moveSpeed = 0.015; 
+
+                    if (dist > 0.4) {
+                        enemy.pathTimer++;
+                        if (enemy.pathTimer > 20 || !enemy.path || enemy.path.length === 0) {
+                            enemy.path = getPath(Math.floor(enemy.x), Math.floor(enemy.y), Math.floor(player.x), Math.floor(player.y));
+                            enemy.pathTimer = 0;
+                        }
+
+                        if (enemy.path && enemy.path.length > 0) {
+                            let tx = enemy.path[0].x;
+                            let ty = enemy.path[0].y;
+                            let tdx = tx - enemy.x;
+                            let tdy = ty - enemy.y;
+                            let tdist = Math.sqrt(tdx*tdx + tdy*tdy);
+                            
+                            if (tdist < 0.2) {
+                                enemy.path.shift(); 
+                            } else {
+                                enemy.x += (tdx/tdist) * moveSpeed;
+                                enemy.y += (tdy/tdist) * moveSpeed;
+                            }
+                        } else {
+                            enemy.x += (dx/dist) * moveSpeed;
+                            enemy.y += (dy/dist) * moveSpeed;
+                        }
+                    } 
+                    else if (dist <= 0.4 && player.hitCooldown === 0) {
+                        applyDamage("enemy_attack");
+                        player.hitCooldown = 60; 
+                        enemy.stunTimer = 40;    
+                    }
+                }
+            }
+        }
+
+        function checkStageCollision() {
+            const checkDist = 0.8;
+            const checkX = Math.floor(player.x + player.dirX * checkDist);
+            const checkY = Math.floor(player.y + player.dirY * checkDist);
+            const tile = worldMap[checkY][checkX];
+            
+            if (tile >= 2 && tile <= 7) {
+                activeStageNode = { x: checkX, y: checkY, type: tile };
+                openStage(tile);
+            }
+        }
+
+        function gameLoop() {
+            updateGame();
+            render3D();
+            renderMinimap();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function openStage(tileId) {
+            initAudio(); 
+            isGamePaused = true;
+            keys = {w:false, s:false, a:false, d:false}; 
+            
+            const stage = stagesData[tileId];
+            document.getElementById('stage-title').innerText = stage.title;
+            document.getElementById('stage-desc').innerText = stage.desc;
+            
+            const btnContainer = document.getElementById('btn-container');
+            btnContainer.innerHTML = ''; 
+            uiLayer.style.display = 'flex';
+
+            if (tileId === 2) {
+                createBtn("홀", () => checkAns("홀", Math.random() < 0.5 ? "홀" : "짝"));
+                createBtn("짝", () => checkAns("짝", Math.random() < 0.5 ? "홀" : "짝"));
+            } else if (tileId === 3) {
+                createBtn("붉은 문", () => checkAns("붉은 문", Math.random() < 0.5 ? "붉은 문" : "검은 문"));
+                createBtn("검은 문", () => checkAns("검은 문", Math.random() < 0.5 ? "붉은 문" : "검은 문"));
+            } else if (tileId === 4) {
+                const ans = Math.floor(Math.random() * 6) + 1;
+                for(let i=1; i<=6; i++) createBtn(`${i}번 약실`, () => checkAns(i, ans));
+            } else if (tileId === 5) {
+                const ans = Math.floor(Math.random() * 3) + 1;
+                createBtn("상자 A", () => checkAns(1, ans));
+                createBtn("상자 B", () => checkAns(2, ans));
+                createBtn("상자 C", () => checkAns(3, ans));
+            } else if (tileId === 6) {
+                createBtn("앞면", () => checkAns("앞면", Math.random() < 0.5 ? "앞면" : "뒷면"));
+                createBtn("뒷면", () => checkAns("뒷면", Math.random() < 0.5 ? "앞면" : "뒷면"));
+            } else if (tileId === 7) {
+                const ans = Math.floor(Math.random() * 5) + 1;
+                for(let i=1; i<=5; i++) createBtn(i, () => checkAns(i, ans));
+            }
+        }
+
+        function createBtn(text, callback) {
+            const btn = document.createElement('button');
+            btn.innerText = text;
+            btn.onclick = callback;
+            document.getElementById('btn-container').appendChild(btn);
+        }
+
+        function checkAns(playerChoice, realAnswer) {
+            uiLayer.style.display = 'none';
+            stageCooldown = 60; 
+            
+            if (playerChoice === realAnswer) {
+                showMsg("길이 열렸다.");
+                worldMap[activeStageNode.y][activeStageNode.x] = 0; 
+                clearedStages++;
+                
+                if(clearedStages >= 6) {
+                    setTimeout(() => {
+                        alert("탈출구다...!!\n\n-- YOU SURVIVED --");
+                        location.reload();
+                    }, 500);
+                }
+            } else {
+                applyDamage("wrong_answer");
+            }
+            isGamePaused = false;
+        }
+
+        function applyDamage(reason) {
+            player.hp--;
+            
+            const overlay = document.getElementById('damage-overlay');
+            overlay.style.opacity = 1;
+            setTimeout(() => overlay.style.opacity = 0, 300);
+
+            playHorrorSound();
+
+            if (player.hp <= 0) {
+                render3D(); 
+                setTimeout(() => {
+                    alert("추격자에게 붙잡혀 어둠 속으로 끌려갔습니다...\n\n처음부터 다시 시작합니다.");
+                    location.reload();
+                }, 100);
+                return;
+            } 
+            
+            if (reason === "wrong_answer") {
+                if (!enemy.active) {
+                    enemy.active = true;
+                    showMsg(`오답입니다... 어둠 속에서 무언가 깨어났습니다! (남은 기회: ${player.hp}번)`);
+                } else {
+                    showMsg(`오답입니다! (남은 기회: ${player.hp}번)`);
+                }
+            } else if (reason === "enemy_attack") {
+                showMsg(`추격자에게 공격당했습니다! (남은 기회: ${player.hp}번)`);
+            }
+        }
+
+        function showMsg(text) {
+            const msgBox = document.getElementById('message');
+            msgBox.innerText = text;
+            msgBox.style.display = 'block';
+            setTimeout(() => msgBox.style.display = 'none', 2500);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
